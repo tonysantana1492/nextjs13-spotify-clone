@@ -1,0 +1,176 @@
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { useSupabaseClient } from "@supabase/auth-helpers-react";
+import { SubmitHandler, useForm } from "react-hook-form";
+import uniqid from "uniqid";
+import toast from "react-hot-toast";
+
+import useUploadModal from "@/hooks/useUploadModal";
+import { useUser } from "@/hooks/useUser";
+import Modal from "./Modal";
+import Input from "./Input";
+import Button from "./Button";
+
+interface IFormData {
+  author: string;
+  title: string;
+  song: FileList;
+  image: FileList;
+}
+
+const UploadModal: React.FC = () => {
+  const [isLoading, setIsLoading] = useState(false);
+  const { isOpen, onClose } = useUploadModal();
+  const router = useRouter();
+  const { user } = useUser();
+  const supabaseClient = useSupabaseClient();
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { isValid },
+  } = useForm<IFormData>({
+    defaultValues: {
+      author: "",
+      title: "",
+    },
+    mode: "onChange",
+  });
+
+  const onChange = (open: boolean) => {
+    if (!open) {
+      reset();
+      onClose();
+    }
+  };
+
+  const onSubmit: SubmitHandler<IFormData> = async ({
+    image,
+    author,
+    song,
+    title,
+  }) => {
+    try {
+      setIsLoading(true);
+
+      const imageFile = image[0];
+      const songFile = song[0];
+
+      if (!isValid) {
+        toast.error("Missing fields");
+        return;
+      }
+
+      const uniqueID = uniqid();
+
+      // Upload song
+      const { data: songData, error: songError } = await supabaseClient.storage
+        .from("songs")
+        .upload(`song-${title}-${uniqueID}`, songFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (songError) {
+        setIsLoading(false);
+        return toast.error("Failed song upload");
+      }
+
+      // Upload image
+      const { data: imageData, error: imageError } =
+        await supabaseClient.storage
+          .from("images")
+          .upload(`image-${title}-${uniqueID}`, imageFile, {
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+      if (imageError) {
+        setIsLoading(false);
+        return toast.error("Failed image upload");
+      }
+
+      // Create record
+      const { error: supabaseError } = await supabaseClient
+        .from("songs")
+        .insert({
+          user_id: user!.id,
+          title: title,
+          author: author,
+          image_path: imageData.path,
+          song_path: songData.path,
+        });
+
+      if (supabaseError) {
+        return toast.error(supabaseError.message);
+      }
+
+      router.refresh();
+      setIsLoading(false);
+      toast.success("Song created!");
+      reset();
+      onClose();
+    } catch (error) {
+      toast.error("Something went wrong");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Add a song"
+      description="Upload a mp3 file"
+      isOpen={isOpen}
+      onChange={onChange}
+    >
+      <form
+        noValidate
+        onSubmit={handleSubmit(onSubmit)}
+        className="flex flex-col gap-y-4"
+      >
+        <Input
+          id="title"
+          disabled={isLoading}
+          {...register("title", { required: true })}
+          placeholder="Song title"
+        />
+        <Input
+          id="author"
+          disabled={isLoading}
+          {...register("author", { required: true })}
+          placeholder="Song author"
+        />
+        <div>
+          <div className="pb-1">Select a song file</div>
+          <Input
+            placeholder="test"
+            disabled={isLoading}
+            type="file"
+            accept=".mp3"
+            id="song"
+            {...register("song", { required: true })}
+          />
+        </div>
+        <div>
+          <div className="pb-1">Select an image</div>
+          <Input
+            placeholder="test"
+            disabled={isLoading}
+            type="file"
+            accept="image/*"
+            id="image"
+            {...register("image", { required: true })}
+          />
+        </div>
+        <Button disabled={isLoading} type="submit">
+          Create
+        </Button>
+      </form>
+    </Modal>
+  );
+};
+
+export default UploadModal;
